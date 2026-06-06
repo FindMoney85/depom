@@ -29,4 +29,4 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         # 2>&1 | (grep -v ...) komutu, Node.js ve deprecation uyarılarını ekrandan gizler
         run: |
-          python botum.py 2>&1 | grep -v -E "Node.js|deprecated|forced to run|will be removed|For more information see" || true
+          python tarama.py 2>&1 | grep -v -E "Node.js|deprecated|forced to run|will be removed|For more information see" || true
