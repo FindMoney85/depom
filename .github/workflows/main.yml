@@ -1,0 +1,26 @@
+name: Kripto Sinyal Botu
+
+on:
+  schedule:
+    # Her 4 saatte bir otomatik çalıştır (UTC saatine göredir)
+    - cron: '0 */4 * * *'
+  workflow_dispatch: # İstediğiniz zaman elle de başlatabilmeniz için
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Kodları Çek
+        uses: actions/checkout@v3
+
+      - name: Python Kur
+        uses: actions/setup-python@v4
+        with:
+          python-mode: '3.10'
+
+      - name: Kütüphaneleri Yükle
+        run: |
+          pip install requests pandas pandas-ta
+
+      - name: Botu Çalıştır
+        run: python tarama.py
