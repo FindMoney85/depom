@@ -9,14 +9,19 @@ on:
 jobs:
   run-bot:
     runs-on: ubuntu-latest
+    
+    # GitHub sunucusuna tüm JavaScript aksiyonlarını Node 24 ile çalıştırmasını söylüyoruz
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
     steps:
       - name: Kodları Çek
-        uses: actions/checkout@v4  # v3 yerine en güncel v4 sürümüne yükseltildi (Node 24 uyumlu)
+        uses: actions/checkout@v4
 
       - name: Python Kur
-        uses: actions/setup-python@v5  # v4 yerine en güncel v5 sürümüne yükseltildi (Node 24 uyumlu)
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.10'  # Hatalı olan 'python-mode' kaldırıldı, doğrusu olan 'python-version' yazıldı
+          python-version: '3.10'
 
       - name: Kütüphaneleri Yükle
         run: |
