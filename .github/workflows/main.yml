@@ -2,14 +2,12 @@ name: Kripto Sinyal Botu
 
 on:
   schedule:
-    # Her 4 saatte bir otomatik çalıştır (UTC saatine göredir)
     - cron: '0 */4 * * *'
-  workflow_dispatch: # İstediğiniz zaman elle de başlatabilmeniz için
+  workflow_dispatch: 
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
-
     steps:
       - name: Kodları Çek
         uses: actions/checkout@v4
@@ -27,6 +25,7 @@ jobs:
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        # 2>&1 | (grep -v ...) komutu, Node.js ve deprecation uyarılarını ekrandan gizler
+          BINANCE_API_KEY: ${{ secrets.BINANCE_API_KEY }}
+          BINANCE_SECRET_KEY: ${{ secrets.BINANCE_SECRET_KEY }}
         run: |
-          python tarama.py 2>&1 | grep -v -E "Node.js|deprecated|forced to run|will be removed|For more information see" || true
+          python botum.py 2>&1 | grep -v -E "Node.js|deprecated|forced to run|will be removed|For more information see" || true
