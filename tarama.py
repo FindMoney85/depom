@@ -1,10 +1,3 @@
-
-#CMC_API_KEY = "2b0e33911dfe4ceb9b6075fe11fef8ab"
-#TELEGRAM_TOKEN = "8014842010:AAFiOdbX6KxlmMdIhwsp7ZZdoniEP53s8hY"
-#TELEGRAM_CHAT_ID = "1382525386"
-
-#koinlerim = ["XVSUSDT", "sei", "tia", "glm", "flux", "fida", "Morpho"]
-
 import time
 import requests
 import pandas as pd
