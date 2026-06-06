@@ -74,7 +74,7 @@ def aktif_binance_koinlerini_getir():
         print(f"⚠️ Vadeli işlemler cüzdanı okunurken hata: {e}")
 
     return list(koin_listesi)
-
+print(koin_listesi) 
 # ==========================================
 # VERİ ÇEKME & STRATEJİ MOTORU
 # ==========================================
