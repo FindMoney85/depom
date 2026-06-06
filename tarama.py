@@ -1,3 +1,4 @@
+import os
 import time
 import requests
 import pandas as pd
@@ -7,8 +8,8 @@ from datetime import datetime  # Saat bilgisi için eklendi
 # ==========================================
 # 1. KULLANICI AYARLARI (BURAYI DÜZENLEYİN)
 # ==========================================
-TELEGRAM_TOKEN = "8014842010:AAFiOdbX6KxlmMdIhwsp7ZZdoniEP53s8hY"
-TELEGRAM_CHAT_ID = "1382525386"
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
 # Koinleri sonuna USDT gelecek şekilde yazın.
 koinlerim = ["XVSUSDT", "SEIUSDT", "TIAUSDT", "GLMUSDT", "FLUXUSDT", "FIDAUSDT", "MORPHOUSDT"]
