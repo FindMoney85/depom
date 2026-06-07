@@ -74,15 +74,22 @@ def aktif_binance_koinlerini_getir():
         print(f"⚠️ Vadeli işlemler cüzdanı okunurken hata: {e}")
 
     return list(koin_listesi)
-print(koin_listesi) 
+
 # ==========================================
 # VERİ ÇEKME & STRATEJİ MOTORU
 # ==========================================
 def telegram_mesaj_gonder(mesaj):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": mesaj, "parse_mode": "Markdown"}
-    try: requests.post(url, json=payload)
-    except: pass
+    try:
+        response = requests.post(url, json=payload)
+        # Telegram'dan dönen yanıtı kontrol edelim
+        if response.status_code != 200:
+            print(f"❌ Telegram Hatası! Kod: {response.status_code}, Yanıt: {response.text}")
+        else:
+            print("✅ Telegram mesajı başarıyla sıraya alındı.")
+    except Exception as e:
+        print(f"💥 Telegram bağlantı hatası: {e}")
 
 def verileri_cek_bybit(sembol):
     url = "https://api.bybit.com/v5/market/kline"
@@ -169,4 +176,10 @@ def ana_dongu():
         telegram_mesaj_gonder(f"⚪ *Tarama Tamamlandı*\n⏰ *Saat:* {su_an}\n📊 *Durum:* Takipteki {len(koinlerim)} cüzdan koininizde yeni bir sinyal değişimi yok.")
 
 if __name__ == "__main__":
+    # GÜVENLİK TESTİ: Şifreler GitHub'dan okunabiliyor mu?
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+        print("❌ HATA: TELEGRAM_TOKEN veya TELEGRAM_CHAT_ID environment variables (Secrets) boş dönüyor!")
+    if not BINANCE_API_KEY or not BINANCE_SECRET_KEY:
+        print("❌ HATA: BINANCE API anahtarları sistem tarafından okunamadı!")
+        
     ana_dongu()
