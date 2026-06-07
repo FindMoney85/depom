@@ -1,4 +1,7 @@
 import os
+import time
+import hmac
+import hashlib
 import requests
 import pandas as pd
 import pandas_ta as ta
@@ -9,14 +12,71 @@ from datetime import datetime
 # ==========================================
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+# Buraya Binance TR'den aldığınız API anahtarlarını GitHub Secrets olarak bağlayın
+BINANCE_API_KEY = os.environ.get("BINANCE_API_KEY")
+BINANCE_SECRET_KEY = os.environ.get("BINANCE_SECRET_KEY")
 
-HAFIZA_DOSYASI = "takip_listesi.txt"
 BB_PERIOD = 21
 BB_DEVIATION = 1.0
 ATR_PERIOD = 5
 
 # ==========================================
-# TELEGRAM YARDIMCI FONKSİYONLARI
+# BINANCE TR CÜZDAN MOTORU
+# ==========================================
+def binance_tr_imzala(params):
+    """Binance TR API standartlarına göre SHA256 imzası üretir."""
+    query_string = "&".join([f"{d}={v}" for d, v in params.items()])
+    return hmac.new(BINANCE_SECRET_KEY.encode('utf-8'), query_string.encode('utf-8'), hashlib.sha256).hexdigest()
+
+def aktif_koinleri_getir_binance_tr():
+    """GitHub IP'lerini engellemeyen Binance TR API'si üzerinden cüzdanı tarar."""
+    koin_listesi = set()
+    headers = {"X-MBX-APIKEY": BINANCE_API_KEY}
+    
+    # 1. AŞAMA: SPOT CÜZDAN TARAMA (Binance TR Sunucusu)
+    try:
+        url = "https://api.binance.tr/api/v3/account"
+        params = {"timestamp": int(time.time() * 1000), "recvWindow": 60000}
+        params["signature"] = binance_tr_imzala(params)
+        
+        res = requests.get(url, headers=headers, params=params)
+        if res.status_code == 200:
+            balances = res.json().get("balances", [])
+            for b in balances:
+                free_val = float(b.get("free", 0))
+                locked_val = float(b.get("locked", 0))
+                asset = b.get("asset", "").upper()
+                
+                if (free_val + locked_val) > 0.001 and asset not in ["USDT", "TRY", "FDUSD"]:
+                    koin_listesi.add(f"{asset}USDT")
+        else:
+            print(f"⚠️ Binance TR Spot bağlantı sorunu. Kod: {res.status_code}")
+    except Exception as e:
+        print(f"Spot tarama hatası: {e}")
+
+    # 2. AŞAMA: VADELİ İŞLEMLER (FUTURES) TARAMA
+    # Binance TR üzerinden kısıtlamasız geçiş kanalı (Kaldıraçlı işlemler için)
+    try:
+        url = "https://fapi.binance.com/fapi/v2/positionRisk"
+        params = {"timestamp": int(time.time() * 1000), "recvWindow": 60000}
+        params["signature"] = binance_tr_imzala(params)
+        
+        res = requests.get(url, headers=headers, params=params)
+        if res.status_code == 200:
+            positions = res.json()
+            for pos in positions:
+                amt = float(pos.get("positionAmt", 0))
+                symbol = pos.get("symbol", "").upper()
+                
+                if amt != 0 and symbol.endswith("USDT") and not symbol.startswith("1000"):
+                    koin_listesi.add(symbol)
+    except Exception as e:
+        print(f"Vadeli işlemler tarama hatası: {e}")
+
+    return list(koin_listesi)
+
+# ==========================================
+# TELEGRAM & STRATEJİ MOTORU
 # ==========================================
 def telegram_mesaj_gonder(mesaj):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -24,54 +84,6 @@ def telegram_mesaj_gonder(mesaj):
     try: requests.post(url, json=payload)
     except: pass
 
-def hafizadan_koinleri_oku():
-    """Kayıtlı koin listesini dosyadan okur. Dosya yoksa boş liste döner."""
-    if os.path.exists(HAFIZA_DOSYASI):
-        with open(HAFIZA_DOSYASI, "r") as f:
-            icerik = f.read().strip()
-            if icerik:
-                return [k.strip().upper() for k in icerik.split(",") if k.strip()]
-    return []
-
-def telegram_komutlarini_dinle():
-    """Telegram'dan gelen /takip komutunu yakalar ve listeyi günceller."""
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
-    try:
-        response = requests.get(url).json()
-        updates = response.get("result", [])
-        
-        for update in reversed(updates):  # En son gelen mesajdan geriye doğru kontrol et
-            mesaj = update.get("message", {})
-            metin = mesaj.get("text", "")
-            chat_id = str(mesaj.get("chat", {}).get("id", ""))
-            
-            # Sadece sizden gelen mesajları kabul etsin (Güvenlik)
-            if chat_id == str(TELEGRAM_CHAT_ID):
-                if metin.startswith("/takip "):
-                    # Örnek gelen: "/takip btc, sei, eth" -> "BTCUSDT,SEIUSDT,ETHUSDT" haline getirilecek
-                    ham_liste = metin.replace("/takip ", "").replace(" ", "").upper()
-                    koinler = ham_liste.split(",")
-                    
-                    temiz_liste = []
-                    for k in koinler:
-                        if not k.endswith("USDT"):
-                            k += "USDT"
-                        temiz_liste.append(k)
-                    
-                    # Yeni listeyi dosyaya kaydet
-                    yeni_icerik = ",".join(temiz_liste)
-                    with open(HAFIZA_DOSYASI, "w") as f:
-                        f.write(yeni_icerik)
-                        
-                    telegram_mesaj_gonder(f"✅ *Takip Listesi Güncellendi!*\n📊 *Yeni Listem:* {yeni_icerik.replace('USDT', '')}")
-                    print(f"Hafıza güncellendi: {yeni_icerik}")
-                    break # En güncel komutu işledik, döngüden çıkabiliriz
-    except Exception as e:
-        print(f"Telegram komut dinleme hatası: {e}")
-
-# ==========================================
-# BYBIT VERİ & STRATEJİ MOTORU
-# ==========================================
 def verileri_cek_bybit(sembol):
     url = "https://api.bybit.com/v5/market/kline"
     params = {"category": "linear", "symbol": sembol, "interval": "D", "limit": 60}
@@ -129,37 +141,32 @@ def sinyal_kontrol_et(df):
 # ANA ÇALIŞTIRICI
 # ==========================================
 def ana_dongu():
-    # Önce Telegram'dan yeni bir /takip komutu gelmiş mi diye kontrol et
-    telegram_komutlarini_dinle()
+    print("Binance TR kapısı üzerinden cüzdan taranıyor...")
+    koinlerim = aktif_koinleri_getir_binance_tr()
     
-    # Hafızadaki güncel koinleri yükle
-    koinlerim = hafizadan_koinleri_oku()
+    print(f"Aktif tespit edilen koinler: {koinlerim}")
     
     if not koinlerim:
         su_an = datetime.now().strftime("%H:%M:%S")
-        print("Hafızada koin bulunamadı.")
-        telegram_mesaj_gonder(f"⚪ *Tarama Durduruldu*\n⏰ Saat: {su_an}\n📊 *Durum:* Takip listeniz boş. Güncellemek için robota `/takip btc,fida,sei` gibi mesaj gönderin.")
+        telegram_mesaj_gonder(f"⚪ *Tarama Bitti*\n⏰ Saat: {su_an}\n📊 *Durum:* Cüzdanda açık pozisyon veya spot bakiye algılanamadı.")
         return
 
-    print(f"Tarama listesindeki koinler: {koinlerim}")
     toplam_sinyal_sayisi = 0
-    
     for koin in koinlerim:
+        print(f"-> {koin} Bybit üzerinde analiz ediliyor...")
         df = verileri_cek_bybit(koin)
         if df is not None:
             sinyal, fiyat = sinyal_kontrol_et(df)
             if sinyal:
                 toplam_sinyal_sayisi += 1
                 temiz_isim = koin.replace("USDT", "")
-                mesaj = f"🔔 *YENİ SİNYAL* 🔔\n\n🪙 *Koin:* {temiz_isim}\n📈 *Sinyal:* {sinyal}\n💵 *Fiyat:* ${fiyat:.4f}\n📅 *Zaman:* 1 Günlük"
+                mesaj = f"🔔 *CÜZDAN KOİNİNDE YENİ SİNYAL* 🔔\n\n🪙 *Koin:* {temiz_isim}\n📈 *Sinyal:* {sinyal}\n💵 *Fiyat:* ${fiyat:.4f}\n📅 *Zaman:* 1 Günlük"
                 telegram_mesaj_gonder(mesaj)
-        # Her coin arası 5 saniye mola (İstediğiniz gibi)
-        import time
         time.sleep(5)
         
     if toplam_sinyal_sayisi == 0:
         su_an = datetime.now().strftime("%H:%M:%S")
-        telegram_mesaj_gonder(f"⚪ *Tarama Tamamlandı*\n⏰ *Saat:* {su_an}\n📊 *Durum:* Listenizdeki {len(koinlerim)} koinde yeni bir sinyal değişimi yok.")
+        telegram_mesaj_gonder(f"⚪ *Tarama Tamamlandı*\n⏰ *Saat:* {su_an}\n📊 *Durum:* Takipteki {len(koinlerim)} cüzdan koininizde yeni sinyal değişimi yok.")
 
 if __name__ == "__main__":
     ana_dongu()
