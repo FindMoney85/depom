@@ -30,11 +30,11 @@ def binance_imzala(params):
 
 def aktif_binance_koinlerini_getir():
     """Binance Spot ve Vadeli (Futures) cüzdanındaki aktif koinleri toplar."""
-    koin_listesi = set() # Çift kayıtları engellemek için küme kullanıyoruz
+    koin_listesi = set()
     timestamp = int(time.time() * 1000)
     headers = {"X-MBX-APIKEY": BINANCE_API_KEY}
 
-    # 1. Aşama: SPOT CÜZDAN TARAMASI (Bakiye > 0 olanlar)
+    # 1. Aşama: SPOT CÜZDAN TARAMASI
     try:
         spot_url = "https://api.binance.com/api/v3/account"
         spot_params = {"timestamp": timestamp}
@@ -48,30 +48,43 @@ def aktif_binance_koinlerini_getir():
                 locked_val = float(b.get("locked", 0))
                 varlik_adi = b.get("asset", "")
                 
-                # Toz bakiyeleri (küçük miktarları) elemek için ve USDT'yi taramamak için filtre
                 if (free_val + locked_val) > 0.001 and varlik_adi not in ["USDT", "FDUSD", "BNB"]:
                     koin_listesi.add(f"{varlik_adi}USDT")
     except Exception as e:
         print(f"⚠️ Spot cüzdan okunurken hata: {e}")
 
-    # 2. Aşama: VADELİ (FUTURES) CÜZDAN TARAMASI (Açık Pozisyonu Olanlar)
+    # 2. Aşama: VADELİ (FUTURES) CÜZDAN TARAMASI (Güncellenmiş Güvenli Versiyon)
     try:
+        # FAPI (Futures API) için resmi ve en güncel endpoint
         f_url = "https://fapi.binance.com/fapi/v2/positionRisk"
-        f_params = {"timestamp": timestamp}
+        f_timestamp = int(time.time() * 1000)
+        f_params = {"timestamp": f_timestamp}
         f_params["signature"] = binance_imzala(f_params)
         
         res = requests.get(f_url, headers=headers, params=f_params)
+        
         if res.status_code == 200:
             positions = res.json()
+            acik_pozisyon_sayisi = 0
+            
             for pos in positions:
                 amt = float(pos.get("positionAmt", 0))
                 symbol = pos.get("symbol", "")
                 
-                # Eğer pozisyon miktarı 0 değilse içeride açık işlem var demektir
-                if amt != 0 and symbol.endswith("USDT"):
-                    koin_listesi.add(symbol)
+                # Eğer pozisyon büyüklüğü (amt) 0 değilse işlem aktiftir
+                if amt != 0:
+                    # Sadece Bybit'in de desteklediği standart USDT çiftlerini filtrele
+                    if symbol.endswith("USDT") and not symbol.startswith("1000"):
+                        koin_listesi.add(symbol)
+                        acik_pozisyon_sayisi += 1
+            
+            print(f"ℹ️ Binance Vadeli İşlemlerde {acik_pozisyon_sayisi} adet açık pozisyon algılandı.")
+            
+        else:
+            print(f"❌ Vadeli işlemler API yanıt vermedi. Kod: {res.status_code}, Mesaj: {res.text}")
+            
     except Exception as e:
-        print(f"⚠️ Vadeli işlemler cüzdanı okunurken hata: {e}")
+        print(f"⚠️ Vadeli işlemler cüzdanı okunurken teknik hata: {e}")
 
     return list(koin_listesi)
 
