@@ -21,17 +21,11 @@ jobs:
         run: |
           pip install requests pandas pandas-ta
 
-      - name: Botu Çalıştır ve Komutları Dinle
+      - name: Botu Çalıştır ve Uyarıları Filtrele
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          BINANCE_API_KEY: ${{ secrets.BINANCE_API_KEY }}
+          BINANCE_SECRET_KEY: ${{ secrets.BINANCE_SECRET_KEY }}
         run: |
           python botum.py 2>&1 | grep -v -E "Node.js|deprecated|forced to run|will be removed|For more information see" || true
-
-      - name: Hafızayı GitHub Deposuna Geri Kaydet
-        run: |
-          git config --global user.name "GitHub Actions Bot"
-          git config --global user.email "actions@github.com"
-          git add takip_listesi.txt || true
-          git commit -m "Takip listesi hafızası güncellendi [skip ci]" || true
-          git push || true
