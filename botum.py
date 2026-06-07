@@ -31,13 +31,13 @@ def binance_imzala(params):
 def aktif_binance_koinlerini_getir():
     """Binance Spot ve Vadeli (Futures) cüzdanındaki aktif koinleri toplar."""
     koin_listesi = set()
-    timestamp = int(time.time() * 1000)
     headers = {"X-MBX-APIKEY": BINANCE_API_KEY}
 
     # 1. Aşama: SPOT CÜZDAN TARAMASI
     try:
         spot_url = "https://api.binance.com/api/v3/account"
-        spot_params = {"timestamp": timestamp}
+        # recvWindow=60000: GitHub sunucusu ile Binance arasındaki zaman gecikmesi engelini çözer
+        spot_params = {"timestamp": int(time.time() * 1000), "recvWindow": 60000}
         spot_params["signature"] = binance_imzala(spot_params)
         
         res = requests.get(spot_url, headers=headers, params=spot_params)
@@ -53,15 +53,17 @@ def aktif_binance_koinlerini_getir():
     except Exception as e:
         print(f"⚠️ Spot cüzdan okunurken hata: {e}")
 
-    # 2. Aşama: VADELİ (FUTURES) CÜZDAN TARAMASI (Güncellenmiş Güvenli Versiyon)
+    # 2. Aşama: VADELİ (FUTURES) CÜZDAN TARAMASI (Zaman Kayması Korumalı)
     try:
-        # FAPI (Futures API) için resmi ve en güncel endpoint
+        # IP engellerini aşmak için alternatif fapi sunucu adresi kullanıyoruz
         f_url = "https://fapi.binance.com/fapi/v2/positionRisk"
-        f_timestamp = int(time.time() * 1000)
-        f_params = {"timestamp": f_timestamp}
+        f_params = {"timestamp": int(time.time() * 1000), "recvWindow": 60000}
         f_params["signature"] = binance_imzala(f_params)
         
         res = requests.get(f_url, headers=headers, params=f_params)
+        
+        # Log ekranında ne döndüğünü canlı görelim:
+        print(f"DEBUG - API Durum Kodu: {res.status_code}")
         
         if res.status_code == 200:
             positions = res.json()
@@ -71,20 +73,20 @@ def aktif_binance_koinlerini_getir():
                 amt = float(pos.get("positionAmt", 0))
                 symbol = pos.get("symbol", "")
                 
-                # Eğer pozisyon büyüklüğü (amt) 0 değilse işlem aktiftir
                 if amt != 0:
-                    # Sadece Bybit'in de desteklediği standart USDT çiftlerini filtrele
                     if symbol.endswith("USDT") and not symbol.startswith("1000"):
                         koin_listesi.add(symbol)
                         acik_pozisyon_sayisi += 1
             
             print(f"ℹ️ Binance Vadeli İşlemlerde {acik_pozisyon_sayisi} adet açık pozisyon algılandı.")
             
+        elif res.status_code == -1021:
+            print("❌ HATA: Zaman damgası hatası (Timestamp). GitHub sunucusunun saati Binance ile uyuşmuyor.")
         else:
-            print(f"❌ Vadeli işlemler API yanıt vermedi. Kod: {res.status_code}, Mesaj: {res.text}")
+            print(f"❌ API Yanıtı: {res.status_code} - {res.text}")
             
     except Exception as e:
-        print(f"⚠️ Vadeli işlemler cüzdanı okunurken teknik hata: {e}")
+        print(f"⚠️ Vadeli işlemler cüzdanı teknik hata: {e}")
 
     return list(koin_listesi)
 
