@@ -1,7 +1,4 @@
 import os
-import time
-import hmac
-import hashlib
 import requests
 import pandas as pd
 import pandas_ta as ta
@@ -12,103 +9,72 @@ from datetime import datetime
 # ==========================================
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
-BINANCE_API_KEY = os.environ.get("BINANCE_API_KEY")
-BINANCE_SECRET_KEY = os.environ.get("BINANCE_SECRET_KEY")
 
-# Strateji Parametreleri
+HAFIZA_DOSYASI = "takip_listesi.txt"
 BB_PERIOD = 21
 BB_DEVIATION = 1.0
 ATR_PERIOD = 5
 
 # ==========================================
-# BINANCE CÜZDAN TARAYICI FONKSİYONLARI
-# ==========================================
-def binance_imzala(params):
-    """Binance API istekleri için gerekli SHA256 imzasını oluşturur."""
-    query_string = "&".join([f"{d}={v}" for d, v in params.items()])
-    return hmac.new(BINANCE_SECRET_KEY.encode('utf-8'), query_string.encode('utf-8'), hashlib.sha256).hexdigest()
-
-def aktif_binance_koinlerini_getir():
-    """Binance Spot ve Vadeli (Futures) cüzdanındaki aktif koinleri toplar."""
-    koin_listesi = set()
-    headers = {"X-MBX-APIKEY": BINANCE_API_KEY}
-
-    # 1. Aşama: SPOT CÜZDAN TARAMASI
-    try:
-        spot_url = "https://api.binance.com/api/v3/account"
-        # recvWindow=60000: GitHub sunucusu ile Binance arasındaki zaman gecikmesi engelini çözer
-        spot_params = {"timestamp": int(time.time() * 1000), "recvWindow": 60000}
-        spot_params["signature"] = binance_imzala(spot_params)
-        
-        res = requests.get(spot_url, headers=headers, params=spot_params)
-        if res.status_code == 200:
-            balances = res.json().get("balances", [])
-            for b in balances:
-                free_val = float(b.get("free", 0))
-                locked_val = float(b.get("locked", 0))
-                varlik_adi = b.get("asset", "")
-                
-                if (free_val + locked_val) > 0.001 and varlik_adi not in ["USDT", "FDUSD", "BNB"]:
-                    koin_listesi.add(f"{varlik_adi}USDT")
-    except Exception as e:
-        print(f"⚠️ Spot cüzdan okunurken hata: {e}")
-
-    # 2. Aşama: VADELİ (FUTURES) CÜZDAN TARAMASI (Zaman Kayması Korumalı)
-    try:
-        # IP engellerini aşmak için alternatif fapi sunucu adresi kullanıyoruz
-        f_url = "https://fapi.binance.com/fapi/v2/positionRisk"
-        f_params = {"timestamp": int(time.time() * 1000), "recvWindow": 60000}
-        f_params["signature"] = binance_imzala(f_params)
-        
-        res = requests.get(f_url, headers=headers, params=f_params)
-        
-        # Log ekranında ne döndüğünü canlı görelim:
-        print(f"DEBUG - API Durum Kodu: {res.status_code}")
-        
-        if res.status_code == 200:
-            positions = res.json()
-            acik_pozisyon_sayisi = 0
-            
-            for pos in positions:
-                amt = float(pos.get("positionAmt", 0))
-                symbol = pos.get("symbol", "")
-                
-                if amt != 0:
-                    if symbol.endswith("USDT") and not symbol.startswith("1000"):
-                        koin_listesi.add(symbol)
-                        acik_pozisyon_sayisi += 1
-            
-            print(f"ℹ️ Binance Vadeli İşlemlerde {acik_pozisyon_sayisi} adet açık pozisyon algılandı.")
-            
-        elif res.status_code == -1021:
-            print("❌ HATA: Zaman damgası hatası (Timestamp). GitHub sunucusunun saati Binance ile uyuşmuyor.")
-        else:
-            print(f"❌ API Yanıtı: {res.status_code} - {res.text}")
-            
-    except Exception as e:
-        print(f"⚠️ Vadeli işlemler cüzdanı teknik hata: {e}")
-
-    return list(koin_listesi)
-
-# ==========================================
-# VERİ ÇEKME & STRATEJİ MOTORU
+# TELEGRAM YARDIMCI FONKSİYONLARI
 # ==========================================
 def telegram_mesaj_gonder(mesaj):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": mesaj, "parse_mode": "Markdown"}
-    try:
-        response = requests.post(url, json=payload)
-        # Telegram'dan dönen yanıtı kontrol edelim
-        if response.status_code != 200:
-            print(f"❌ Telegram Hatası! Kod: {response.status_code}, Yanıt: {response.text}")
-        else:
-            print("✅ Telegram mesajı başarıyla sıraya alındı.")
-    except Exception as e:
-        print(f"💥 Telegram bağlantı hatası: {e}")
+    try: requests.post(url, json=payload)
+    except: pass
 
+def hafizadan_koinleri_oku():
+    """Kayıtlı koin listesini dosyadan okur. Dosya yoksa boş liste döner."""
+    if os.path.exists(HAFIZA_DOSYASI):
+        with open(HAFIZA_DOSYASI, "r") as f:
+            icerik = f.read().strip()
+            if icerik:
+                return [k.strip().upper() for k in icerik.split(",") if k.strip()]
+    return []
+
+def telegram_komutlarini_dinle():
+    """Telegram'dan gelen /takip komutunu yakalar ve listeyi günceller."""
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
+    try:
+        response = requests.get(url).json()
+        updates = response.get("result", [])
+        
+        for update in reversed(updates):  # En son gelen mesajdan geriye doğru kontrol et
+            mesaj = update.get("message", {})
+            metin = mesaj.get("text", "")
+            chat_id = str(mesaj.get("chat", {}).get("id", ""))
+            
+            # Sadece sizden gelen mesajları kabul etsin (Güvenlik)
+            if chat_id == str(TELEGRAM_CHAT_ID):
+                if metin.startswith("/takip "):
+                    # Örnek gelen: "/takip btc, sei, eth" -> "BTCUSDT,SEIUSDT,ETHUSDT" haline getirilecek
+                    ham_liste = metin.replace("/takip ", "").replace(" ", "").upper()
+                    koinler = ham_liste.split(",")
+                    
+                    temiz_liste = []
+                    for k in koinler:
+                        if not k.endswith("USDT"):
+                            k += "USDT"
+                        temiz_liste.append(k)
+                    
+                    # Yeni listeyi dosyaya kaydet
+                    yeni_icerik = ",".join(temiz_liste)
+                    with open(HAFIZA_DOSYASI, "w") as f:
+                        f.write(yeni_icerik)
+                        
+                    telegram_mesaj_gonder(f"✅ *Takip Listesi Güncellendi!*\n📊 *Yeni Listem:* {yeni_icerik.replace('USDT', '')}")
+                    print(f"Hafıza güncellendi: {yeni_icerik}")
+                    break # En güncel komutu işledik, döngüden çıkabiliriz
+    except Exception as e:
+        print(f"Telegram komut dinleme hatası: {e}")
+
+# ==========================================
+# BYBIT VERİ & STRATEJİ MOTORU
+# ==========================================
 def verileri_cek_bybit(sembol):
     url = "https://api.bybit.com/v5/market/kline"
-    params = {"category": "linear", "symbol": sembol.upper(), "interval": "D", "limit": 60}
+    params = {"category": "linear", "symbol": sembol, "interval": "D", "limit": 60}
     try:
         response = requests.get(url, params=params)
         if response.status_code == 200:
@@ -163,38 +129,37 @@ def sinyal_kontrol_et(df):
 # ANA ÇALIŞTIRICI
 # ==========================================
 def ana_dongu():
-    print("Binance cüzdanındaki koinler sorgulanıyor...")
-    koinlerim = aktif_binance_koinlerini_getir()
+    # Önce Telegram'dan yeni bir /takip komutu gelmiş mi diye kontrol et
+    telegram_komutlarini_dinle()
     
-    print(f"Tarama listesine alınan koinler: {koinlerim}")
+    # Hafızadaki güncel koinleri yükle
+    koinlerim = hafizadan_koinleri_oku()
     
     if not koinlerim:
         su_an = datetime.now().strftime("%H:%M:%S")
-        telegram_mesaj_gonder(f"⚪ *Tarama Bitti*\n⏰ Saat: {su_an}\n📊 *Durum:* Binance cüzdanınızda açık pozisyon veya spot bakiye bulunamadı.")
+        print("Hafızada koin bulunamadı.")
+        telegram_mesaj_gonder(f"⚪ *Tarama Durduruldu*\n⏰ Saat: {su_an}\n📊 *Durum:* Takip listeniz boş. Güncellemek için robota `/takip btc,fida,sei` gibi mesaj gönderin.")
         return
 
+    print(f"Tarama listesindeki koinler: {koinlerim}")
     toplam_sinyal_sayisi = 0
+    
     for koin in koinlerim:
-        print(f"-> {koin} kontrol ediliyor...")
         df = verileri_cek_bybit(koin)
         if df is not None:
             sinyal, fiyat = sinyal_kontrol_et(df)
             if sinyal:
                 toplam_sinyal_sayisi += 1
                 temiz_isim = koin.replace("USDT", "")
-                mesaj = f"🔔 *CÜZDAN KOİNİNDE YENİ SİNYAL* 🔔\n\n🪙 *Koin:* {temiz_isim}\n📈 *Sinyal:* {sinyal}\n💵 *Fiyat:* ${fiyat:.4f}\n📅 *Zaman:* 1 Günlük"
+                mesaj = f"🔔 *YENİ SİNYAL* 🔔\n\n🪙 *Koin:* {temiz_isim}\n📈 *Sinyal:* {sinyal}\n💵 *Fiyat:* ${fiyat:.4f}\n📅 *Zaman:* 1 Günlük"
                 telegram_mesaj_gonder(mesaj)
+        # Her coin arası 5 saniye mola (İstediğiniz gibi)
+        import time
         time.sleep(5)
         
     if toplam_sinyal_sayisi == 0:
         su_an = datetime.now().strftime("%H:%M:%S")
-        telegram_mesaj_gonder(f"⚪ *Tarama Tamamlandı*\n⏰ *Saat:* {su_an}\n📊 *Durum:* Takipteki {len(koinlerim)} cüzdan koininizde yeni bir sinyal değişimi yok.")
+        telegram_mesaj_gonder(f"⚪ *Tarama Tamamlandı*\n⏰ *Saat:* {su_an}\n📊 *Durum:* Listenizdeki {len(koinlerim)} koinde yeni bir sinyal değişimi yok.")
 
 if __name__ == "__main__":
-    # GÜVENLİK TESTİ: Şifreler GitHub'dan okunabiliyor mu?
-    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-        print("❌ HATA: TELEGRAM_TOKEN veya TELEGRAM_CHAT_ID environment variables (Secrets) boş dönüyor!")
-    if not BINANCE_API_KEY or not BINANCE_SECRET_KEY:
-        print("❌ HATA: BINANCE API anahtarları sistem tarafından okunamadı!")
-        
     ana_dongu()
