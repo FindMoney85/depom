@@ -6,19 +6,17 @@ import time
 import os
 
 # --- TELEGRAM AYARLARI ---
-TELEGRAM_BOT_TOKEN        = os.environ.get("TELEGRAM_TOKEN")
-TELEGRAM_CHAT_ID      = os.environ.get("TELEGRAM_CHAT_ID")
+TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
+TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID')
 
-
-# --- BYBIT BAŞLAT ---
-# Mum verilerini çekmek için herhangi bir API Key gerekmez
-bybit = ccxt.bybit({'enableRateLimit': True})
-
-# Aynı mumda tekrar tekrar mesaj atmaması için sinyal geçmişini tutan sözlük
-last_alerted_candles = {}
+# KUCOIN BAŞLAT (GitHub sunucularında engelsiz ve stabil çalışır)
+# Herhangi bir API key girmenize gerek yoktur.
+data_provider = ccxt.kucoin({'enableRateLimit': True})
 
 def send_telegram_message(message):
-    """Telegram'a HTML formatında mesaj gönderir."""
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        print("🚨 Hata: Telegram Token veya Chat ID bulunamadı! GitHub Secrets ayarlarını kontrol edin.")
+        return
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML"}
     try:
@@ -27,41 +25,32 @@ def send_telegram_message(message):
         print(f"Telegram mesaj hatası: {e}")
 
 def read_coins_from_file(filename="coinlerim.txt"):
-    """coinlerim.txt dosyasından coin listesini okur ve temizler."""
     if not os.path.exists(filename):
-        print(f"🚨 Hata: {filename} dosyası bulunamadı! Lütfen oluşturun.")
+        print(f"🚨 Hata: {filename} dosyası bulunamadı!")
         return []
     
-    with open(filename, "r") as f:
-        lines = f.readlines()
-        
     coins = []
-    for line in lines:
-        coin = line.strip().upper()
-        if coin:
-            # Eğer parite biçiminde yazılmadıysa sonuna /USDT ekle
-            if "/" not in coin:
-                coin = f"{coin}/USDT"
-            coins.append(coin)
+    with open(filename, "r") as f:
+        for line in f.readlines():
+            coin = line.strip().upper()
+            if coin:
+                if "/" not in coin:
+                    coin = f"{coin}/USDT"
+                coins.append(coin)
     return coins
 
 def calculate_follow_line(df, atr_period=5, bb_period=21, bb_deviation=1.0, use_atr=True):
-    """Pine Script'teki Follow Line stratejisinin birebir Python hesaplaması."""
-    
-    # 1. Bollinger Bands Hesaplama
     df['sma'] = df['close'].rolling(window=bb_period).mean()
-    df['stdev'] = df['close'].rolling(window=bb_period).std(ddof=0) # Kitle standart sapması (Pine ile uyumlu)
+    df['stdev'] = df['close'].rolling(window=bb_period).std(ddof=0)
     df['bb_upper'] = df['sma'] + (df['stdev'] * bb_deviation)
     df['bb_lower'] = df['sma'] - (df['stdev'] * bb_deviation)
     
-    # 2. ATR Hesaplama (Pine Script ta.atr -> RMA/Wilder's düzeltmesi kullanır)
     high_low = df['high'] - df['low']
     high_cp = (df['high'] - df['close'].shift(1)).abs()
     low_cp = (df['low'] - df['close'].shift(1)).abs()
     df['tr'] = pd.concat([high_low, high_cp, low_cp], axis=1).max(axis=1)
     df['atr'] = df['tr'].ewm(alpha=1/atr_period, adjust=False).mean()
     
-    # Döngü için listeleri hazırlayalım (Pine Script'teki seri takibi mantığı)
     follow_line = [float('nan')] * len(df)
     i_trend = [0] * len(df)
     bb_signal = 0
@@ -69,7 +58,6 @@ def calculate_follow_line(df, atr_period=5, bb_period=21, bb_deviation=1.0, use_
     for i in range(len(df)):
         if i < bb_period:
             continue
-            
         close_val = df['close'].iloc[i]
         low_val = df['low'].iloc[i]
         high_val = df['high'].iloc[i]
@@ -78,13 +66,11 @@ def calculate_follow_line(df, atr_period=5, bb_period=21, bb_deviation=1.0, use_
         atr_val = df['atr'].iloc[i]
         prev_fl = follow_line[i-1]
         
-        # BBSignal Durumu
         if close_val > bb_upper:
             bb_signal = 1
         elif close_val < bb_lower:
             bb_signal = -1
             
-        # Follow Line Hesaplama Mantığı
         current_fl = float('nan')
         if bb_signal == 1:
             current_fl = (low_val - atr_val) if use_atr else low_val
@@ -97,7 +83,6 @@ def calculate_follow_line(df, atr_period=5, bb_period=21, bb_deviation=1.0, use_
                 
         follow_line[i] = current_fl
         
-        # Trend Yönü Belirleme (nz mantığı: NaN ise bir önceki trend korunur)
         if pd.isna(follow_line[i-1]) or pd.isna(follow_line[i]):
             i_trend[i] = i_trend[i-1]
         elif follow_line[i] > follow_line[i-1]:
@@ -112,36 +97,28 @@ def calculate_follow_line(df, atr_period=5, bb_period=21, bb_deviation=1.0, use_
     return df
 
 def check_signals():
-    """Dosyadaki tüm coinleri Bybit günlük grafiklerinde tarar."""
     my_symbols = read_coins_from_file()
     if not my_symbols:
         return
 
-    print(f"🔄 Tarama başlatıldı. Toplam coin sayısı: {len(my_symbols)}")
+    print(f"🔄 Tarama başlatıldı. Veriler KuCoin üzerinden çekiliyor... Coinler: {my_symbols}")
     
     for symbol in my_symbols:
         try:
-            # Günlük (1d) verileri çek (En az 100 mum hesaplama için idealdir)
-            ohlcv = bybit.fetch_ohlcv(symbol, timeframe='1d', limit=150)
+            # KuCoin üzerinden günlük (1d) verileri çekiyoruz
+            ohlcv = data_provider.fetch_ohlcv(symbol, timeframe='1d', limit=150)
             df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
             
-            # Stratejiyi uygula
             df = calculate_follow_line(df)
-            
-            # GÜNLÜK grafiklerde işlem yaptığımız için;
-            # iloc[-1] = Henüz kapanmamış, aktif olan bugünün mumudur (Sinyal değişebilir - Repaint riski).
-            # iloc[-2] = Dün gece kapanmış olan en son kesinleşmiş mumdur.
-            # iloc[-3] = Ondan bir önceki kesinleşmiş mumdur.
             
             current_row = df.iloc[-2]
             previous_row = df.iloc[-3]
             
             current_trend = current_row['i_trend']
             previous_trend = previous_row['i_trend']
-            candle_time = str(current_row['timestamp']) # Benzersiz kontrol için zaman damgası
+            candle_time = current_row['timestamp'].strftime('%Y-%m-%d')
             
-            # Yeni bir trend dönüşümü var mı kontrol et
             signal = None
             if previous_trend == -1 and current_trend == 1:
                 signal = "🟢 <b>FOLLOW LINE: BUY (AL)</b>"
@@ -149,22 +126,17 @@ def check_signals():
                 signal = "🔴 <b>FOLLOW LINE: SELL (SAT)</b>"
                 
             if signal:
-                # Bu coin için bu mumda daha önce sinyal atılmadıysa mesaj gönder
-                if last_alerted_candles.get(symbol) != candle_time:
-                    msg = f"🚨 <b>{symbol} - Günlük Grafik</b>\n\nSinyal: {signal}\nKapanış Fiyatı: {current_row['close']}\nMum Tarihi: {candle_time}"
-                    send_telegram_message(msg)
-                    print(f"🔔 Sinyal gönderildi: {symbol} -> {signal}")
-                    last_alerted_candles[symbol] = candle_time
+                msg = f"🚨 <b>{symbol} - Günlük Grafik</b>\n\nSinyal: {signal}\nKapanış Fiyatı: {current_row['close']}\nSinyal Günü: {candle_time}"
+                send_telegram_message(msg)
+                print(f"🔔 Sinyal gönderildi: {symbol} -> {signal}")
                     
-            time.sleep(0.5) # Bybit istek sınırı (Rate limit) koruması
+            time.sleep(0.5) # İstek sınırına takılmamak için bekleme
             
         except Exception as e:
-            print(f"❌ {symbol} taranırken hata oluştu (Bybit'te listeli olmayabilir): {e}")
+            print(f"❌ {symbol} taranırken hata: {e}")
 
 def main():
-    print("🚀 GitHub Actions: Follow Line Günlük Tarama Başlatıldı...")
     check_signals()
-    print("✅ Tarama tamamlandı, script kapatılıyor.")
 
 if __name__ == '__main__':
     main()
