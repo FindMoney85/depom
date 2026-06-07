@@ -9,8 +9,8 @@ import os
 TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
 TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID')
 
-# Binance Public API kullanarak kısıtlamaları aşın
-exchange = ccxt.binance({'enableRateLimit': True})
+# GitHub sunucularını engellemeyen MEXC borsasını kullanıyoruz
+exchange = ccxt.mexc({'enableRateLimit': True})
 
 def send_telegram_message(message):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
@@ -35,7 +35,6 @@ def read_coins_from_file(filename="coinlerim.txt"):
         for line in f.readlines():
             coin = line.strip().upper()
             if coin:
-                # Yorum satırlarını veya boşlukları atla
                 if coin.startswith("#"):
                     continue
                 if "/" not in coin:
@@ -44,13 +43,11 @@ def read_coins_from_file(filename="coinlerim.txt"):
     return coins
 
 def calculate_follow_line(df, atr_period=5, bb_period=21, bb_deviation=1.0, use_atr=True):
-    # Bollinger Bantları Hesaplaması
     df['sma'] = df['close'].rolling(window=bb_period).mean()
     df['stdev'] = df['close'].rolling(window=bb_period).std(ddof=0)
     df['bb_upper'] = df['sma'] + (df['stdev'] * bb_deviation)
     df['bb_lower'] = df['sma'] - (df['stdev'] * bb_deviation)
     
-    # ATR Hesaplaması
     high_low = df['high'] - df['low']
     high_cp = (df['high'] - df['close'].shift(1)).abs()
     low_cp = (df['low'] - df['close'].shift(1)).abs()
@@ -59,8 +56,6 @@ def calculate_follow_line(df, atr_period=5, bb_period=21, bb_deviation=1.0, use_
     
     follow_line = [float('nan')] * len(df)
     i_trend = [0] * len(df)
-    
-    # Trend takibi için yardımcı değişkenler
     current_trend = 1 
     
     for i in range(len(df)):
@@ -75,7 +70,6 @@ def calculate_follow_line(df, atr_period=5, bb_period=21, bb_deviation=1.0, use_
         atr_val = df['atr'].iloc[i]
         prev_fl = follow_line[i-1]
         
-        # Orijinal indikatör mantığı: Fiyat banta göre trend yönünü belirler
         if close_val > bb_upper:
             current_trend = 1
         elif close_val < bb_lower:
@@ -93,14 +87,11 @@ def calculate_follow_line(df, atr_period=5, bb_period=21, bb_deviation=1.0, use_
                 
         follow_line[i] = current_fl
         
-        # Trend geçiş tetiklenmesi: Fiyatın Follow Line'ı kırması kontrolü
         if pd.isna(follow_line[i-1]):
             i_trend[i] = current_trend
         else:
-            # Eğer trend yukarıysa ve fiyat çizginin altına sarkarsa trend döner
             if i_trend[i-1] == 1 and close_val < follow_line[i-1]:
                 i_trend[i] = -1
-            # Eğer trend aşağıysa ve fiyat çizginin üstüne çıkarsa trend döner
             elif i_trend[i-1] == -1 and close_val > follow_line[i-1]:
                 i_trend[i] = 1
             else:
@@ -116,22 +107,22 @@ def check_signals():
         print("⚠️ Taranacak coin bulunamadı. Liste boş veya dosya eksik.")
         return
 
-    print(f"🔄 Tarama başlatıldı (Binance Servisi). Toplam Coin Sayısı: {len(my_symbols)}")
+    print(f"🔄 Tarama başlatıldı (MEXC Servisi). Toplam Coin Sayısı: {len(my_symbols)}")
     
-    # Binance borsasındaki aktif sembolleri kontrol etmek için yükle
     try:
         exchange.load_markets()
     except Exception as e:
-        print(f"🚨 Binance piyasa verileri yüklenemedi: {e}")
+        print(f"🚨 MEXC piyasa verileri yüklenemedi: {e}")
         return
         
     for symbol in my_symbols:
+        # MEXC parite formatı uyumluluğu kontrolü
         if symbol not in exchange.markets:
-            print(f"⚠️ {symbol} Binance üzerinde bulunamadı, atlanıyor...")
+            print(f"⚠️ {symbol} MEXC üzerinde bulunamadı, atlanıyor...")
             continue
             
         try:
-            # 150 gün yerine indikatör otursun diye limit 200 yapıldı
+            # Günlük (1d) verileri çekiyoruz
             ohlcv = exchange.fetch_ohlcv(symbol, timeframe='1d', limit=200)
             if len(ohlcv) < 30:
                 print(f"⚠️ {symbol} için yeterli geçmiş veri yok.")
@@ -142,7 +133,7 @@ def check_signals():
             
             df = calculate_follow_line(df)
             
-            # Güncel ve bir önceki tamamlanmış günün satırları
+            # Kapanmış son günün mumu ve bir önceki günün mumu
             current_row = df.iloc[-2]
             previous_row = df.iloc[-3]
             
@@ -150,7 +141,7 @@ def check_signals():
             previous_trend = previous_row['i_trend']
             candle_time = current_row['timestamp'].strftime('%Y-%m-%d')
             
-            print(f"🔍 {symbol} Analiz Ediliyor... [Dün: {previous_trend} -> Bugün: {current_trend}]")
+            print(f"🔍 {symbol} Analiz Ediliyor... [Önceki: {previous_trend} -> Güncel: {current_trend}]")
             
             signal = None
             if previous_trend == -1 and current_trend == 1:
@@ -163,7 +154,7 @@ def check_signals():
                 send_telegram_message(msg)
                 print(f"🔔 Sinyal gönderildi: {symbol} -> {signal}")
                     
-            time.sleep(0.5) # Rate limit aşım koruması
+            time.sleep(1.0) # MEXC için güvenli bekleme süresi
             
         except Exception as e:
             print(f"❌ {symbol} taranırken hata oluştu: {e}")
