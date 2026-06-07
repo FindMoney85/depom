@@ -9,8 +9,7 @@ import os
 TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
 TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID')
 
-# BAĞLANTI ENGELİNİ AŞMAK İÇİN BINANCE PUBLIC KULLANIYORUZ
-# Herhangi bir API key gerekmez, herkese açık mum verilerini çeker.
+# Binance Public API kullanarak kısıtlamaları aşın
 exchange = ccxt.binance({'enableRateLimit': True})
 
 def send_telegram_message(message):
@@ -20,7 +19,9 @@ def send_telegram_message(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML"}
     try:
-        requests.post(url, data=payload)
+        response = requests.post(url, data=payload)
+        if response.status_code != 200:
+            print(f"🚨 Telegram API Hatası: {response.text}")
     except Exception as e:
         print(f"Telegram mesaj hatası: {e}")
 
@@ -34,17 +35,22 @@ def read_coins_from_file(filename="coinlerim.txt"):
         for line in f.readlines():
             coin = line.strip().upper()
             if coin:
+                # Yorum satırlarını veya boşlukları atla
+                if coin.startswith("#"):
+                    continue
                 if "/" not in coin:
                     coin = f"{coin}/USDT"
                 coins.append(coin)
     return coins
 
 def calculate_follow_line(df, atr_period=5, bb_period=21, bb_deviation=1.0, use_atr=True):
+    # Bollinger Bantları Hesaplaması
     df['sma'] = df['close'].rolling(window=bb_period).mean()
     df['stdev'] = df['close'].rolling(window=bb_period).std(ddof=0)
     df['bb_upper'] = df['sma'] + (df['stdev'] * bb_deviation)
     df['bb_lower'] = df['sma'] - (df['stdev'] * bb_deviation)
     
+    # ATR Hesaplaması
     high_low = df['high'] - df['low']
     high_cp = (df['high'] - df['close'].shift(1)).abs()
     low_cp = (df['low'] - df['close'].shift(1)).abs()
@@ -53,11 +59,14 @@ def calculate_follow_line(df, atr_period=5, bb_period=21, bb_deviation=1.0, use_
     
     follow_line = [float('nan')] * len(df)
     i_trend = [0] * len(df)
-    bb_signal = 0
+    
+    # Trend takibi için yardımcı değişkenler
+    current_trend = 1 
     
     for i in range(len(df)):
         if i < bb_period:
             continue
+            
         close_val = df['close'].iloc[i]
         low_val = df['low'].iloc[i]
         high_val = df['high'].iloc[i]
@@ -66,32 +75,37 @@ def calculate_follow_line(df, atr_period=5, bb_period=21, bb_deviation=1.0, use_
         atr_val = df['atr'].iloc[i]
         prev_fl = follow_line[i-1]
         
+        # Orijinal indikatör mantığı: Fiyat banta göre trend yönünü belirler
         if close_val > bb_upper:
-            bb_signal = 1
+            current_trend = 1
         elif close_val < bb_lower:
-            bb_signal = -1
+            current_trend = -1
             
         current_fl = float('nan')
-        if bb_signal == 1:
+        if current_trend == 1:
             current_fl = (low_val - atr_val) if use_atr else low_val
             if not pd.isna(prev_fl) and current_fl < prev_fl:
                 current_fl = prev_fl
-        elif bb_signal == -1:
+        elif current_trend == -1:
             current_fl = (high_val + atr_val) if use_atr else high_val
             if not pd.isna(prev_fl) and current_fl > prev_fl:
                 current_fl = prev_fl
                 
         follow_line[i] = current_fl
         
-        if pd.isna(follow_line[i-1]) or pd.isna(follow_line[i]):
-            i_trend[i] = i_trend[i-1]
-        elif follow_line[i] > follow_line[i-1]:
-            i_trend[i] = 1
-        elif follow_line[i] < follow_line[i-1]:
-            i_trend[i] = -1
+        # Trend geçiş tetiklenmesi: Fiyatın Follow Line'ı kırması kontrolü
+        if pd.isna(follow_line[i-1]):
+            i_trend[i] = current_trend
         else:
-            i_trend[i] = i_trend[i-1]
-            
+            # Eğer trend yukarıysa ve fiyat çizginin altına sarkarsa trend döner
+            if i_trend[i-1] == 1 and close_val < follow_line[i-1]:
+                i_trend[i] = -1
+            # Eğer trend aşağıysa ve fiyat çizginin üstüne çıkarsa trend döner
+            elif i_trend[i-1] == -1 and close_val > follow_line[i-1]:
+                i_trend[i] = 1
+            else:
+                i_trend[i] = i_trend[i-1]
+                
     df['follow_line'] = follow_line
     df['i_trend'] = i_trend
     return df
@@ -99,26 +113,44 @@ def calculate_follow_line(df, atr_period=5, bb_period=21, bb_deviation=1.0, use_
 def check_signals():
     my_symbols = read_coins_from_file()
     if not my_symbols:
+        print("⚠️ Taranacak coin bulunamadı. Liste boş veya dosya eksik.")
         return
 
-    print(f"🔄 Tarama başlatıldı (Binance Servisi). Coinler: {my_symbols}")
+    print(f"🔄 Tarama başlatıldı (Binance Servisi). Toplam Coin Sayısı: {len(my_symbols)}")
     
+    # Binance borsasındaki aktif sembolleri kontrol etmek için yükle
+    try:
+        exchange.load_markets()
+    except Exception as e:
+        print(f"🚨 Binance piyasa verileri yüklenemedi: {e}")
+        return
+        
     for symbol in my_symbols:
+        if symbol not in exchange.markets:
+            print(f"⚠️ {symbol} Binance üzerinde bulunamadı, atlanıyor...")
+            continue
+            
         try:
-            # Veriyi engelsiz olan Binance üzerinden çekiyoruz
-            ohlcv = exchange.fetch_ohlcv(symbol, timeframe='1d', limit=150)
+            # 150 gün yerine indikatör otursun diye limit 200 yapıldı
+            ohlcv = exchange.fetch_ohlcv(symbol, timeframe='1d', limit=200)
+            if len(ohlcv) < 30:
+                print(f"⚠️ {symbol} için yeterli geçmiş veri yok.")
+                continue
+                
             df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
             
             df = calculate_follow_line(df)
             
-            # Kapanmış son günün mumu ve bir önceki günün mumu
+            # Güncel ve bir önceki tamamlanmış günün satırları
             current_row = df.iloc[-2]
             previous_row = df.iloc[-3]
             
             current_trend = current_row['i_trend']
             previous_trend = previous_row['i_trend']
             candle_time = current_row['timestamp'].strftime('%Y-%m-%d')
+            
+            print(f"🔍 {symbol} Analiz Ediliyor... [Dün: {previous_trend} -> Bugün: {current_trend}]")
             
             signal = None
             if previous_trend == -1 and current_trend == 1:
@@ -131,10 +163,10 @@ def check_signals():
                 send_telegram_message(msg)
                 print(f"🔔 Sinyal gönderildi: {symbol} -> {signal}")
                     
-            time.sleep(0.5) # İstek aşımı (Rate limit) koruması
+            time.sleep(0.5) # Rate limit aşım koruması
             
         except Exception as e:
-            print(f"❌ {symbol} taranırken hata: {e}")
+            print(f"❌ {symbol} taranırken hata oluştu: {e}")
 
 def main():
     check_signals()
