@@ -115,14 +115,14 @@ def check_signals():
         print(f"🚨 MEXC piyasa verileri yüklenemedi: {e}")
         return
         
+    gonderilen_sinyal_sayisi = 0
+    
     for symbol in my_symbols:
-        # MEXC parite formatı uyumluluğu kontrolü
         if symbol not in exchange.markets:
             print(f"⚠️ {symbol} MEXC üzerinde bulunamadı, atlanıyor...")
             continue
             
         try:
-            # Günlük (1d) verileri çekiyoruz
             ohlcv = exchange.fetch_ohlcv(symbol, timeframe='1d', limit=200)
             if len(ohlcv) < 30:
                 print(f"⚠️ {symbol} için yeterli geçmiş veri yok.")
@@ -133,7 +133,6 @@ def check_signals():
             
             df = calculate_follow_line(df)
             
-            # Kapanmış son günün mumu ve bir önceki günün mumu
             current_row = df.iloc[-2]
             previous_row = df.iloc[-3]
             
@@ -153,11 +152,16 @@ def check_signals():
                 msg = f"🚨 <b>{symbol} - Günlük Grafik</b>\n\nSinyal: {signal}\nKapanış Fiyatı: {current_row['close']}\nSinyal Günü: {candle_time}"
                 send_telegram_message(msg)
                 print(f"🔔 Sinyal gönderildi: {symbol} -> {signal}")
+                gonderilen_sinyal_sayisi += 1
                     
-            time.sleep(1.0) # MEXC için güvenli bekleme süresi
+            time.sleep(1.0)
             
         except Exception as e:
             print(f"❌ {symbol} taranırken hata oluştu: {e}")
+
+    # --- TARAMA BİTTİ BİLDİRİMİ ---
+    tamamlama_mesaji = f"✅ <b>Tarama Başarıyla Tamamlandı</b>\n\n📊 Toplam taranan coin: {len(my_symbols)}\n🔔 Gönderilen yeni sinyal: {gonderilen_sinyal_sayisi}"
+    send_telegram_message(tamamlama_mesaji)
 
 def main():
     check_signals()
