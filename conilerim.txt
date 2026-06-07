@@ -1,0 +1,7 @@
+xvsusdt
+seiusdt
+tiausdt
+glmusdt
+fluxusdt
+fidausdt
+morphousdt
