@@ -1,235 +1,175 @@
-import os
-import time
-import hmac
-import hashlib
-import requests
+import ccxt
 import pandas as pd
-from datetime import datetime
+import numpy as np
+import requests
+import time
+import os
 
-# ==========================================
-# SİSTEM AYARLARI
-# ==========================================
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
-BINANCE_API_KEY = os.environ.get("BINANCE_API_KEY")
-BINANCE_SECRET_KEY = os.environ.get("BINANCE_SECRET_KEY")
+# --- TELEGRAM AYARLARI ---
+TELEGRAM_BOT_TOKEN        = os.environ.get("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID      = os.environ.get("TELEGRAM_CHAT_ID")
 
-BB_PERIOD = 21
-BB_DEVIATION = 1.0
-ATR_PERIOD = 5
 
-# ==========================================
-# TELEGRAM
-# ==========================================
-def telegram_mesaj_gonder(mesaj):
-    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-        print(f"❌ HATA: TELEGRAM_TOKEN={'VAR' if TELEGRAM_TOKEN else 'YOK'}, CHAT_ID={'VAR' if TELEGRAM_CHAT_ID else 'YOK'}")
-        return False
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": mesaj, "parse_mode": "Markdown"}
+# --- BYBIT BAŞLAT ---
+# Mum verilerini çekmek için herhangi bir API Key gerekmez
+bybit = ccxt.bybit({'enableRateLimit': True})
+
+# Aynı mumda tekrar tekrar mesaj atmaması için sinyal geçmişini tutan sözlük
+last_alerted_candles = {}
+
+def send_telegram_message(message):
+    """Telegram'a HTML formatında mesaj gönderir."""
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML"}
     try:
-        res = requests.post(url, json=payload, timeout=10)
-        if res.status_code == 200:
-            print("✅ Telegram mesajı gönderildi.")
-            return True
-        else:
-            print(f"❌ Telegram hatası! Kod: {res.status_code}, Yanıt: {res.text}")
-            return False
+        requests.post(url, data=payload)
     except Exception as e:
-        print(f"❌ Telegram bağlantı hatası: {e}")
-        return False
+        print(f"Telegram mesaj hatası: {e}")
 
-# ==========================================
-# ATR — pandas_ta olmadan manuel hesaplama
-# ==========================================
-def atr_hesapla(df, period=5):
-    high = df['high']
-    low = df['low']
-    close = df['close']
-    prev_close = close.shift(1)
-    tr = pd.concat([
-        high - low,
-        (high - prev_close).abs(),
-        (low - prev_close).abs()
-    ], axis=1).max(axis=1)
-    return tr.rolling(window=period).mean()
-
-# ==========================================
-# BİNANCE TR CÜZDAN
-# ==========================================
-def binance_tr_imzala(params):
-    query_string = "&".join([f"{k}={v}" for k, v in params.items()])
-    return hmac.new(
-        BINANCE_SECRET_KEY.encode('utf-8'),
-        query_string.encode('utf-8'),
-        hashlib.sha256
-    ).hexdigest()
-
-def aktif_koinleri_getir_binance_tr():
-    koin_listesi = set()
-
-    if not BINANCE_API_KEY or not BINANCE_SECRET_KEY:
-        print(f"❌ HATA: API_KEY={'VAR' if BINANCE_API_KEY else 'YOK'}, SECRET={'VAR' if BINANCE_SECRET_KEY else 'YOK'}")
+def read_coins_from_file(filename="coinlerim.txt"):
+    """coinlerim.txt dosyasından coin listesini okur ve temizler."""
+    if not os.path.exists(filename):
+        print(f"🚨 Hata: {filename} dosyası bulunamadı! Lütfen oluşturun.")
         return []
+    
+    with open(filename, "r") as f:
+        lines = f.readlines()
+        
+    coins = []
+    for line in lines:
+        coin = line.strip().upper()
+        if coin:
+            # Eğer parite biçiminde yazılmadıysa sonuna /USDT ekle
+            if "/" not in coin:
+                coin = f"{coin}/USDT"
+            coins.append(coin)
+    return coins
 
-    headers = {"X-MBX-APIKEY": BINANCE_API_KEY}
-
-    # SPOT
-    try:
-        params = {"timestamp": int(time.time() * 1000), "recvWindow": 60000}
-        params["signature"] = binance_tr_imzala(params)
-        res = requests.get("https://api.binance.tr/api/v3/account", headers=headers, params=params, timeout=15)
-        print(f"   Spot API yanıt: {res.status_code}")
-        if res.status_code == 200:
-            for b in res.json().get("balances", []):
-                asset = b.get("asset", "").upper()
-                toplam = float(b.get("free", 0)) + float(b.get("locked", 0))
-                if toplam > 0.001 and asset not in ["USDT", "TRY", "FDUSD", "BNB"]:
-                    koin_listesi.add(f"{asset}USDT")
-                    print(f"   + Spot: {asset} ({toplam:.6f})")
-        else:
-            print(f"⚠️ Spot hatası: {res.text[:200]}")
-    except Exception as e:
-        print(f"❌ Spot tarama hatası: {e}")
-
-    # FUTURES
-    try:
-        params = {"timestamp": int(time.time() * 1000), "recvWindow": 60000}
-        params["signature"] = binance_tr_imzala(params)
-        res = requests.get("https://fapi.binance.com/fapi/v2/positionRisk", headers=headers, params=params, timeout=15)
-        print(f"   Futures API yanıt: {res.status_code}")
-        if res.status_code == 200:
-            for pos in res.json():
-                amt = float(pos.get("positionAmt", 0))
-                symbol = pos.get("symbol", "").upper()
-                if amt != 0 and symbol.endswith("USDT") and not symbol.startswith("1000"):
-                    koin_listesi.add(symbol)
-                    print(f"   + Futures: {symbol} ({amt})")
-        else:
-            print(f"⚠️ Futures çalışmıyor (Kod: {res.status_code}) — sadece spot tarandı.")
-    except Exception as e:
-        print(f"⚠️ Futures hatası: {e}")
-
-    return list(koin_listesi)
-
-# ==========================================
-# VERİ & SİNYAL
-# ==========================================
-def verileri_cek_bybit(sembol):
-    params = {"category": "linear", "symbol": sembol, "interval": "D", "limit": 60}
-    try:
-        res = requests.get("https://api.bybit.com/v5/market/kline", params=params, timeout=15)
-        if res.status_code == 200:
-            list_data = res.json().get("result", {}).get("list", [])
-            if not list_data:
-                print(f"   ⚠️ {sembol}: Bybit'te veri yok")
-                return None
-            df = pd.DataFrame(list_data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'turnover'])
-            df = df.iloc[::-1].reset_index(drop=True)
-            for col in ['open', 'high', 'low', 'close']:
-                df[col] = df[col].astype(float)
-            return df
-    except Exception as e:
-        print(f"   ❌ {sembol} veri hatası: {e}")
-    return None
-
-def sinyal_kontrol_et(df):
-    if df is None or len(df) < BB_PERIOD:
-        return None, None
-
-    sma = df['close'].rolling(window=BB_PERIOD).mean()
-    std = df['close'].rolling(window=BB_PERIOD).std()
-    df['bb_upper'] = sma + (std * BB_DEVIATION)
-    df['bb_lower'] = sma - (std * BB_DEVIATION)
-    df['atr'] = atr_hesapla(df, ATR_PERIOD)   # pandas_ta yerine kendi fonksiyonumuz
-
-    bb_signal = 0
-    follow_line = [0.0] * len(df)
+def calculate_follow_line(df, atr_period=5, bb_period=21, bb_deviation=1.0, use_atr=True):
+    """Pine Script'teki Follow Line stratejisinin birebir Python hesaplaması."""
+    
+    # 1. Bollinger Bands Hesaplama
+    df['sma'] = df['close'].rolling(window=bb_period).mean()
+    df['stdev'] = df['close'].rolling(window=bb_period).std(ddof=0) # Kitle standart sapması (Pine ile uyumlu)
+    df['bb_upper'] = df['sma'] + (df['stdev'] * bb_deviation)
+    df['bb_lower'] = df['sma'] - (df['stdev'] * bb_deviation)
+    
+    # 2. ATR Hesaplama (Pine Script ta.atr -> RMA/Wilder's düzeltmesi kullanır)
+    high_low = df['high'] - df['low']
+    high_cp = (df['high'] - df['close'].shift(1)).abs()
+    low_cp = (df['low'] - df['close'].shift(1)).abs()
+    df['tr'] = pd.concat([high_low, high_cp, low_cp], axis=1).max(axis=1)
+    df['atr'] = df['tr'].ewm(alpha=1/atr_period, adjust=False).mean()
+    
+    # Döngü için listeleri hazırlayalım (Pine Script'teki seri takibi mantığı)
+    follow_line = [float('nan')] * len(df)
     i_trend = [0] * len(df)
-
-    for i in range(1, len(df)):
+    bb_signal = 0
+    
+    for i in range(len(df)):
+        if i < bb_period:
+            continue
+            
         close_val = df['close'].iloc[i]
-        high_val  = df['high'].iloc[i]
-        low_val   = df['low'].iloc[i]
-        atr_val   = df['atr'].iloc[i] if not pd.isna(df['atr'].iloc[i]) else 0
-
-        if close_val > df['bb_upper'].iloc[i]:
+        low_val = df['low'].iloc[i]
+        high_val = df['high'].iloc[i]
+        bb_upper = df['bb_upper'].iloc[i]
+        bb_lower = df['bb_lower'].iloc[i]
+        atr_val = df['atr'].iloc[i]
+        prev_fl = follow_line[i-1]
+        
+        # BBSignal Durumu
+        if close_val > bb_upper:
             bb_signal = 1
-        elif close_val < df['bb_lower'].iloc[i]:
+        elif close_val < bb_lower:
             bb_signal = -1
-
-        prev_fl = follow_line[i - 1]
+            
+        # Follow Line Hesaplama Mantığı
+        current_fl = float('nan')
         if bb_signal == 1:
-            follow_line[i] = max(low_val - atr_val, prev_fl)
+            current_fl = (low_val - atr_val) if use_atr else low_val
+            if not pd.isna(prev_fl) and current_fl < prev_fl:
+                current_fl = prev_fl
         elif bb_signal == -1:
-            follow_line[i] = min(high_val + atr_val, prev_fl)
-        else:
-            follow_line[i] = prev_fl
-
-        if follow_line[i] > follow_line[i - 1]:
+            current_fl = (high_val + atr_val) if use_atr else high_val
+            if not pd.isna(prev_fl) and current_fl > prev_fl:
+                current_fl = prev_fl
+                
+        follow_line[i] = current_fl
+        
+        # Trend Yönü Belirleme (nz mantığı: NaN ise bir önceki trend korunur)
+        if pd.isna(follow_line[i-1]) or pd.isna(follow_line[i]):
+            i_trend[i] = i_trend[i-1]
+        elif follow_line[i] > follow_line[i-1]:
             i_trend[i] = 1
-        elif follow_line[i] < follow_line[i - 1]:
+        elif follow_line[i] < follow_line[i-1]:
             i_trend[i] = -1
         else:
-            i_trend[i] = i_trend[i - 1]
+            i_trend[i] = i_trend[i-1]
+            
+    df['follow_line'] = follow_line
+    df['i_trend'] = i_trend
+    return df
 
-    if i_trend[-2] == -1 and i_trend[-1] == 1:
-        return "AL (BUY)", df['close'].iloc[-1]
-    elif i_trend[-2] == 1 and i_trend[-1] == -1:
-        return "SAT (SELL)", df['close'].iloc[-1]
-    return None, None
-
-# ==========================================
-# ANA DÖNGÜ
-# ==========================================
-def ana_dongu():
-    su_an = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
-    print(f"\n{'='*50}\nBot başlatıldı: {su_an}\n{'='*50}")
-
-    telegram_mesaj_gonder(f"🤖 *Bot Aktif*\n⏰ {su_an}\n🔍 Cüzdan taranıyor...")
-
-    print("\n[1] Binance TR cüzdanı taranıyor...")
-    koinlerim = aktif_koinleri_getir_binance_tr()
-    print(f"Bulunan koinler: {koinlerim}")
-
-    if not koinlerim:
-        telegram_mesaj_gonder(
-            f"⚪ *Tarama Bitti*\n"
-            f"⏰ {datetime.now().strftime('%H:%M:%S')}\n"
-            f"📊 Cüzdanda bakiye veya açık pozisyon bulunamadı."
-        )
+def check_signals():
+    """Dosyadaki tüm coinleri Bybit günlük grafiklerinde tarar."""
+    my_symbols = read_coins_from_file()
+    if not my_symbols:
         return
 
-    print(f"\n[2] {len(koinlerim)} koin analiz ediliyor...")
-    toplam_sinyal = 0
+    print(f"🔄 Tarama başlatıldı. Toplam coin sayısı: {len(my_symbols)}")
+    
+    for symbol in my_symbols:
+        try:
+            # Günlük (1d) verileri çek (En az 100 mum hesaplama için idealdir)
+            ohlcv = bybit.fetch_ohlcv(symbol, timeframe='1d', limit=150)
+            df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+            
+            # Stratejiyi uygula
+            df = calculate_follow_line(df)
+            
+            # GÜNLÜK grafiklerde işlem yaptığımız için;
+            # iloc[-1] = Henüz kapanmamış, aktif olan bugünün mumudur (Sinyal değişebilir - Repaint riski).
+            # iloc[-2] = Dün gece kapanmış olan en son kesinleşmiş mumdur.
+            # iloc[-3] = Ondan bir önceki kesinleşmiş mumdur.
+            
+            current_row = df.iloc[-2]
+            previous_row = df.iloc[-3]
+            
+            current_trend = current_row['i_trend']
+            previous_trend = previous_row['i_trend']
+            candle_time = str(current_row['timestamp']) # Benzersiz kontrol için zaman damgası
+            
+            # Yeni bir trend dönüşümü var mı kontrol et
+            signal = None
+            if previous_trend == -1 and current_trend == 1:
+                signal = "🟢 <b>FOLLOW LINE: BUY (AL)</b>"
+            elif previous_trend == 1 and current_trend == -1:
+                signal = "🔴 <b>FOLLOW LINE: SELL (SAT)</b>"
+                
+            if signal:
+                # Bu coin için bu mumda daha önce sinyal atılmadıysa mesaj gönder
+                if last_alerted_candles.get(symbol) != candle_time:
+                    msg = f"🚨 <b>{symbol} - Günlük Grafik</b>\n\nSinyal: {signal}\nKapanış Fiyatı: {current_row['close']}\nMum Tarihi: {candle_time}"
+                    send_telegram_message(msg)
+                    print(f"🔔 Sinyal gönderildi: {symbol} -> {signal}")
+                    last_alerted_candles[symbol] = candle_time
+                    
+            time.sleep(0.5) # Bybit istek sınırı (Rate limit) koruması
+            
+        except Exception as e:
+            print(f"❌ {symbol} taranırken hata oluştu (Bybit'te listeli olmayabilir): {e}")
 
-    for koin in koinlerim:
-        print(f"-> {koin}...")
-        df = verileri_cek_bybit(koin)
-        sinyal, fiyat = sinyal_kontrol_et(df)
-        if sinyal:
-            toplam_sinyal += 1
-            mesaj = (
-                f"🔔 *CÜZDAN KOİNİNDE YENİ SİNYAL*\n\n"
-                f"🪙 *Koin:* {koin.replace('USDT','')}\n"
-                f"📈 *Sinyal:* {sinyal}\n"
-                f"💵 *Fiyat:* ${fiyat:.4f}\n"
-                f"📅 *Zaman:* 1 Günlük"
-            )
-            telegram_mesaj_gonder(mesaj)
-            print(f"   ✅ {sinyal} @ ${fiyat:.4f}")
-        else:
-            print(f"   — Sinyal yok")
-        time.sleep(2)
+def main():
+    print("🚀 Follow Line Günlük Tarama Botu Çalıştırıldı...")
+    while True:
+        check_signals()
+        
+        # Günlük grafik baktığımız için botun sürekli saniyede bir dönmesine gerek yok.
+        # Her 4 saatte bir (`14400` saniye) yeni verileri ve dosyadaki güncellemeleri kontrol eder.
+        print("⏰ Tarama bitti. Bir sonraki kontrol için 4 saat bekleniyor...")
+        time.sleep(14400)
 
-    if toplam_sinyal == 0:
-        telegram_mesaj_gonder(
-            f"⚪ *Tarama Tamamlandı*\n"
-            f"⏰ {datetime.now().strftime('%H:%M:%S')}\n"
-            f"📊 {len(koinlerim)} koinde yeni sinyal yok."
-        )
-
-    print(f"\n{'='*50}\nBot tamamlandı. Sinyal sayısı: {toplam_sinyal}\n{'='*50}")
-
-if __name__ == "__main__":
-    ana_dongu()
+if __name__ == '__main__':
+    main()
