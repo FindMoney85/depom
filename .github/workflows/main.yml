@@ -1,13 +1,16 @@
-name: Follow Line Bot Kılavuzu
+name: Follow Line Bot Kilavuzu
 
 on:
   schedule:
-    # Her 4 saatte bir otomatik çalışır (Dakika Saat Gün Ay Gün_Haftası)
-    # UTC saatine göredir. 00:00, 04:00, 08:00, 12:00, 16:00, 20:00 UTC
+    # Her 4 saatte bir otomatik çalışır (UTC saatine göre)
     - cron: '0 */4 * * *'
   
-  # GitHub paneli üzerinden "Run workflow" butonuyla elinle de tetikleyebilmen için:
+  # Manuel tetikleme butonu
   workflow_dispatch:
+
+# GitHub'ın Node.js 24 zorunluluğu uyarısını susturmak ve sistemi güncellemek için:
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
 jobs:
   run-trading-bot:
@@ -18,11 +21,11 @@ jobs:
     - name: Depoyu Klonla
       uses: actions/checkout@v4
 
-    # 2. Sunucuya Python Kur
+    # 2. Sunucuya Python Kur (Yazım hatası düzeltildi)
     - name: Python Kur
       uses: actions/setup-python@v5
       with:
-        python-python-version: '3.10'
+        python-version: '3.10'
 
     # 3. Gerekli kütüphaneleri yükle
     - name: Kütüphaneleri Yükle
