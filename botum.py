@@ -162,14 +162,9 @@ def check_signals():
             print(f"❌ {symbol} taranırken hata oluştu (Bybit'te listeli olmayabilir): {e}")
 
 def main():
-    print("🚀 Follow Line Günlük Tarama Botu Çalıştırıldı...")
-    while True:
-        check_signals()
-        
-        # Günlük grafik baktığımız için botun sürekli saniyede bir dönmesine gerek yok.
-        # Her 4 saatte bir (`14400` saniye) yeni verileri ve dosyadaki güncellemeleri kontrol eder.
-        print("⏰ Tarama bitti. Bir sonraki kontrol için 4 saat bekleniyor...")
-        time.sleep(14400)
+    print("🚀 GitHub Actions: Follow Line Günlük Tarama Başlatıldı...")
+    check_signals()
+    print("✅ Tarama tamamlandı, script kapatılıyor.")
 
 if __name__ == '__main__':
     main()
