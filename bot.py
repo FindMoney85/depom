@@ -9,9 +9,9 @@ import os
 TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
 TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID')
 
-# KUCOIN BAŞLAT (GitHub sunucularında engelsiz ve stabil çalışır)
-# Herhangi bir API key girmenize gerek yoktur.
-data_provider = ccxt.kucoin({'enableRateLimit': True})
+# BAĞLANTI ENGELİNİ AŞMAK İÇİN BINANCE PUBLIC KULLANIYORUZ
+# Herhangi bir API key gerekmez, herkese açık mum verilerini çeker.
+exchange = ccxt.binance({'enableRateLimit': True})
 
 def send_telegram_message(message):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
@@ -101,17 +101,18 @@ def check_signals():
     if not my_symbols:
         return
 
-    print(f"🔄 Tarama başlatıldı. Veriler KuCoin üzerinden çekiliyor... Coinler: {my_symbols}")
+    print(f"🔄 Tarama başlatıldı (Binance Servisi). Coinler: {my_symbols}")
     
     for symbol in my_symbols:
         try:
-            # KuCoin üzerinden günlük (1d) verileri çekiyoruz
-            ohlcv = data_provider.fetch_ohlcv(symbol, timeframe='1d', limit=150)
+            # Veriyi engelsiz olan Binance üzerinden çekiyoruz
+            ohlcv = exchange.fetch_ohlcv(symbol, timeframe='1d', limit=150)
             df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
             
             df = calculate_follow_line(df)
             
+            # Kapanmış son günün mumu ve bir önceki günün mumu
             current_row = df.iloc[-2]
             previous_row = df.iloc[-3]
             
@@ -130,7 +131,7 @@ def check_signals():
                 send_telegram_message(msg)
                 print(f"🔔 Sinyal gönderildi: {symbol} -> {signal}")
                     
-            time.sleep(0.5) # İstek sınırına takılmamak için bekleme
+            time.sleep(0.5) # İstek aşımı (Rate limit) koruması
             
         except Exception as e:
             print(f"❌ {symbol} taranırken hata: {e}")
