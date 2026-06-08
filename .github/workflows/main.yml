@@ -2,8 +2,8 @@ name: Follow Line Bot Kilavuzu
 
 on:
   schedule:
-    # Her 4 saatte bir otomatik çalışır (UTC saatine göre)
-    - cron: '0 */4 * * *'
+    # Her gün 10:00 - 22:00 otomatik çalışır (UTC saatine göre)
+    - cron: '0 7,19 * * *'
   
   # Manuel tetikleme butonu
   workflow_dispatch:
