@@ -31,6 +31,6 @@ jobs:
       # 4. Botu çalıştır ve GitHub Secrets'tan tokenları güvenli bir şekilde bota aktar
       - name: Botu Çalıştır
         env:
-          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python bot.py
