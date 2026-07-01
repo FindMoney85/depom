@@ -3,4 +3,3 @@ pandas
 numpy
 requests
 pykap
-git+https://github.com/rongardF/tvdatafeed.git
