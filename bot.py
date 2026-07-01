@@ -20,7 +20,7 @@ except ImportError:
     Interval = None
 
 # --- TELEGRAM AYARLARI ---
-TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_TOKEN')
+TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
 TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID')
 
 # TradingView, login'siz modda kimlik bilgisi istemez ama bazı sembollerde
