@@ -13,27 +13,9 @@ try:
 except ImportError:
     pykap = None
 
-try:
-    from tvDatafeed import TvDatafeed, Interval  # Gayriresmi TradingView veri erişimi
-except ImportError:
-    TvDatafeed = None
-    Interval = None
-
 # --- TELEGRAM AYARLARI ---
 TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
 TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID')
-
-# TradingView, login'siz modda kimlik bilgisi istemez ama bazı sembollerde
-# veri kısıtlı/erişilemez olabilir. Bağlantı bir kere kurulup tüm taramada
-# yeniden kullanılır (her sembol için yeniden bağlanmak çok yavaş olurdu).
-tv_client = None
-if TvDatafeed is not None:
-    try:
-        tv_client = TvDatafeed()  # username/password verilmezse login'siz çalışır
-        print("✅ TradingView (login'siz) bağlantısı kuruldu.")
-    except Exception as e:
-        print(f"⚠️ TradingView bağlantısı kurulamadı, sadece yfinance kullanılacak: {e}")
-        tv_client = None
 
 # Statik yedek liste: KAP'a hiçbir şekilde erişilemezse (online=True ve
 # offline/bundled veri de başarısız olursa) kullanılacak son çare listesi.
@@ -154,33 +136,6 @@ def calculate_follow_line(df, atr_period=5, bb_period=21, bb_deviation=1.0, use_
     return df
 
 
-def fetch_ohlcv_tv(symbol_code, n_bars=150):
-    """
-    TradingView'dan (gayriresmi tvDatafeed kütüphanesi, login'siz mod)
-    BIST hissesi için günlük OHLCV verisi çeker. Kimlik doğrulama
-    gerektirmez ancak bazı sembollerde veri kısıtlı olabilir; böyle
-    durumda None döner ve çağıran taraf yfinance'e düşer.
-    """
-    if tv_client is None:
-        return None
-    try:
-        df = tv_client.get_hist(
-            symbol_code, exchange='BIST', interval=Interval.in_daily, n_bars=n_bars
-        )
-    except Exception:
-        return None
-
-    if df is None or df.empty:
-        return None
-
-    df = df.reset_index()
-    df = df.rename(columns={
-        'datetime': 'timestamp', 'open': 'open', 'high': 'high',
-        'low': 'low', 'close': 'close', 'volume': 'volume'
-    })
-    return df[['timestamp', 'open', 'high', 'low', 'close', 'volume']]
-
-
 def fetch_ohlcv_yf(symbol, period="1y", interval="1d"):
     """Yahoo Finance üzerinden BIST hissesi için günlük OHLCV verisi çeker."""
     data = yf.download(symbol, period=period, interval=interval, progress=False, auto_adjust=False)
@@ -205,31 +160,17 @@ def check_signals():
     sell_signals = []
     analyzed_count = 0
     error_count = 0
-    tv_used_count = 0
-    yf_used_count = 0
 
     for symbol in bist_symbols:
         try:
             coin_name = symbol.replace('.IS', '')
-            df = None
-            source = None
 
-            # 1. YOL: TradingView (login'siz)
-            df = fetch_ohlcv_tv(coin_name, n_bars=150)
-            if df is not None and len(df) >= 30:
-                source = "TV"
-                tv_used_count += 1
-            else:
-                # 2. YOL (Yedek): Yahoo Finance
-                time.sleep(0.3)  # Yahoo Finance için nazik bekleme
-                df = fetch_ohlcv_yf(symbol, period="1y", interval="1d")
-                if df is not None and len(df) >= 30:
-                    source = "YF"
-                    yf_used_count += 1
+            time.sleep(0.3)  # Yahoo Finance için nazik bekleme
+            df = fetch_ohlcv_yf(symbol, period="1y", interval="1d")
 
             if df is None or len(df) < 30:
                 error_count += 1
-                print(f"⚠️ {symbol} için hiçbir kaynaktan yeterli veri bulunamadı.")
+                print(f"⚠️ {symbol} için yeterli veri bulunamadı.")
                 continue
 
             df = calculate_follow_line(df)
@@ -243,7 +184,7 @@ def check_signals():
             close_price = round(float(current_row['close']), 2)
             analyzed_count += 1
 
-            print(f"🔍 [{source}] {coin_name} Analiz Ediliyor... [Önceki: {previous_trend} -> Güncel: {current_trend}]")
+            print(f"🔍 {coin_name} Analiz Ediliyor... [Önceki: {previous_trend} -> Güncel: {current_trend}]")
 
             if previous_trend == -1 and current_trend == 1:
                 buy_signals.append(f"• <b>{coin_name}</b> ({close_price} TL)")
@@ -274,7 +215,7 @@ def check_signals():
     else:
         report_msg += "<i>Satım sinyali üreten hisse bulunamadı.</i>"
 
-    report_msg += f"\n\n───────────────────\n✅ Taranan Hisse: {len(bist_symbols)} | Başarıyla Analiz Edilen: {analyzed_count} | Hata Alan: {error_count}\n📡 Kaynak: TradingView {tv_used_count} | Yahoo Finance {yf_used_count}\n🔔 Yeni Al Sinyali: {len(buy_signals)} | Yeni Sat Sinyali: {len(sell_signals)}"
+    report_msg += f"\n\n───────────────────\n✅ Taranan Hisse: {len(bist_symbols)} | Başarıyla Analiz Edilen: {analyzed_count} | Hata Alan: {error_count}\n🔔 Yeni Al Sinyali: {len(buy_signals)} | Yeni Sat Sinyali: {len(sell_signals)}"
 
     send_telegram_message(report_msg)
     print("📢 Toplu rapor Telegram'a başarıyla iletildi.")
