@@ -1,41 +1,36 @@
 name: Follow Line Bot Kilavuzu
-
 on:
   schedule:
     # Her gün 10:00 - 22:00 otomatik çalışır (UTC saatine göre)
     - cron: '0 7,19 * * *'
-  
+
   # Manuel tetikleme butonu
   workflow_dispatch:
-
-# GitHub'ın Node.js 24 zorunluluğu uyarısını susturmak ve sistemi güncellemek için:
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
 jobs:
   run-trading-bot:
     runs-on: ubuntu-latest
-
     steps:
-    # 1. Depondaki kodları ve "coinlerim.txt" dosyasını sunucuya çek
-    - name: Depoyu Klonla
-      uses: actions/checkout@v4
+      # 1. Depondaki kodları çek
+      - name: Depoyu Klonla
+        uses: actions/checkout@v4
 
-    # 2. Sunucuya Python Kur (Yazım hatası düzeltildi)
-    - name: Python Kur
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.10'
+      # 2. Sunucuya Python Kur
+      - name: Python Kur
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
 
-    # 3. Gerekli kütüphaneleri yükle
-    - name: Kütüphaneleri Yükle
-      run: |
-        python -m pip install --upgrade pip
-        pip install ccxt pandas requests yfinance pykap
+      # 3. Gerekli kütüphaneleri yükle
+      # (ccxt/tvdatafeed artık kullanılmıyor, yfinance + KAP tabanlı çözüme geçildi)
+      - name: Kütüphaneleri Yükle
+        run: |
+          python -m pip install --upgrade pip
+          pip install yfinance pandas requests pykap
 
-    # 4. Botu çalıştır ve GitHub Secrets'tan tokenları güvenli bir şekilde bota aktar
-    - name: Botu Çalıştır
-      env:
-        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-      run: python bot.py
+      # 4. Botu çalıştır ve GitHub Secrets'tan tokenları güvenli bir şekilde bota aktar
+      - name: Botu Çalıştır
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python bist_follow_line_tarama.py
